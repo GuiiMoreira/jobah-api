@@ -1,0 +1,393 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+enum NotificationStatus {
+  ACTIVE
+  DELETED
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserType {
+  client
+  provider
+  admin
+}
+
+enum ChangeRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum ChangeRequestType {
+  PRICE_ADJUSTMENT
+  SCHEDULE_CHANGE
+  SCOPE_CHANGE // Mudança de escopo (adicionar/remover itens)
+}
+
+enum SuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING_APPROVAL
+  PENDING_QUOTE
+  QUOTE_SENT
+  AWAITING_PAYMENT
+  SCHEDULED
+  COMPLETION_REQUESTED
+  COMPLETED
+  CANCELLED
+  REJECTED
+  PROVIDER_NO_SHOW
+}
+
+enum VerificationStatus {
+  NOT_VERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum ReviewStatus {
+  ACTIVE
+  DELETED_BY_USER
+  HIDDEN_BY_ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  DEACTIVATED
+  SUSPENDED 
+}
+
+model ProviderPayoutInfo {
+  id            String  @id @default(uuid())
+  user          User    @relation(fields: [userId], references: [id])
+  userId        String  @unique
+  payoutType    String  // "PIX" ou "BANK_ACCOUNT"
+  pixKey        String?
+  bankName      String?
+  agencyNumber  String?
+  accountNumber String?
+
+  @@map("provider_payout_info")
+}
+
+
+model Withdrawal {
+  id          String   @id @default(uuid())
+  provider    User     @relation(fields: [providerId], references: [id])
+  providerId  String
+  amount      Decimal  @db.Decimal(10, 2)
+  status      String   // "COMPLETED" no nosso fake
+  createdAt   DateTime @default(now())
+
+  @@map("withdrawals")
+}
+
+model User {
+  id              String   @id @default(uuid())
+  name            String
+  email           String   @unique
+  password_hash   String
+  type            UserType
+
+  avatar_url      String?
+  bio             String?
+
+  street          String? 
+  city            String? 
+  state           String? 
+  postalCode      String? 
+
+  cpf                String?   @unique
+  cnpj               String?   @unique
+  phone_number    String?
+  full_address    String?
+
+  websiteUrl      String? // URL do site pessoal ou portfólio
+  instagramUrl    String? // Perfil do Instagram (ótimo para trabalhos visuais)
+  linkedinUrl     String? // Perfil do LinkedIn
+  operatingHours  String? // Texto livre, ex: "Seg-Sex, 8h-18h"
+  yearsOfExperience Int?  // Anos de experiência no ramo principal
+  availableBalance   Decimal? @default(0) @db.Decimal(10, 2)
+
+  averageRating   Float    @default(0)
+  totalReviews    Int      @default(0)
+  created_at      DateTime @default(now())
+  verificationStatus VerificationStatus @default(NOT_VERIFIED)
+  accountStatus      AccountStatus @default(ACTIVE)
+
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+
+  favoritesGiven Favorite[] @relation("FavoritesGiven")
+  favoritedBy    Favorite[] @relation("FavoritedBy")
+  professions ProviderProfession[]
+  requested_suggestions CategorySuggestion[] @relation("RequestedBy")
+  reviewed_suggestions  CategorySuggestion[] @relation("ReviewedBy")
+  orders_as_client      Order[] @relation("ClientOrders")
+  orders_as_provider    Order[] @relation("ProviderOrders")
+  reviews_given     Review[] @relation("ReviewsGiven")
+  reviews_received  Review[] @relation("ReviewsReceived")
+  ons     Notification[]
+  conversations Conversation[]
+  messages      Message[]
+  portfolioImages    PortfolioImage[]
+  changeRequestsMade OrderChangeRequest[]
+  payoutInfo         ProviderPayoutInfo?
+  withdrawals        Withdrawal[]
+
+
+  @@map("users")
+}
+
+model SuperCategory {
+  id          String       @id @default(uuid())
+  name        String       @unique
+
+  // Relação: Uma SuperCategoria tem muitas Profissões
+  professions Profession[]
+
+  @@map("super_categories")
+}
+
+model OrderChangeRequest {
+  id             String              @id @default(uuid())
+  status         ChangeRequestStatus @default(PENDING)
+  type           ChangeRequestType
+  details        String?             // Justificativa da mudança
+
+  // Campos que podem ser alterados
+  proposedPrice  Decimal?            @db.Decimal(10, 2)
+  proposedDate   DateTime?
+
+  createdAt      DateTime            @default(now())
+  resolvedAt     DateTime?           // Data em que foi aceita ou rejeitada
+
+  // Relações
+  order          Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId        String
+  requestedBy    User                @relation(fields: [requestedById], references: [id], onDelete: Cascade)
+  requestedById  String
+
+  @@map("order_change_requests")
+}
+
+model Profession {
+  id   String @id @default(uuid())
+  name String @unique
+  icon_url String?
+
+  // Relação com a tabela de ligação
+  providers ProviderProfession[]
+
+  superCategory   SuperCategory @relation(fields: [superCategoryId], references: [id], onDelete: Restrict)
+  superCategoryId String
+
+  @@map("professions")
+}
+
+model ProviderProfession {
+  id          String @id @default(uuid())
+  description String? // Provider descreve sua experiência naquela profissão
+  base_price  Float?  // Preço "a partir de" para aquela profissão
+  allowInstantBooking  Boolean   @default(false)
+
+  // Chaves estrangeiras e relações
+  provider    User       @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  providerId  String
+  profession  Profession @relation(fields: [professionId], references: [id], onDelete: Restrict)
+  professionId String
+  orderItems   OrderItem[]
+
+  // Garante que um provider só pode se associar uma vez a cada profissão
+  @@unique([providerId, professionId])
+  @@map("provider_professions")
+}
+
+model Favorite {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+
+  // Relação com quem favoritou (o cliente)
+  favoriter   User     @relation("FavoritesGiven", fields: [favoriterId], references: [id], onDelete: Cascade)
+  favoriterId String
+
+  // Relação com quem foi favoritado (o prestador)
+  favorited   User     @relation("FavoritedBy", fields: [favoritedId], references: [id], onDelete: Cascade)
+  favoritedId String
+
+  // Garante que um usuário não pode favoritar o mesmo prestador duas vezes
+  @@unique([favoriterId, favoritedId])
+  @@map("favorites")
+}
+
+model CategorySuggestion {
+  id           String           @id @default(uuid())
+  name         String           @unique // O nome sugerido deve ser único
+  status       SuggestionStatus @default(PENDING)
+  created_at   DateTime         @default(now())
+  updated_at   DateTime         @updatedAt
+
+  requestedBy  User             @relation("RequestedBy", fields: [requestedById], references: [id])
+  requestedById String
+
+  reviewedBy   User?            @relation("ReviewedBy", fields: [reviewedById], references: [id])
+  reviewedById String?
+
+  @@map("category_suggestions")
+}
+
+model Order {
+  id                   String       @id @default(uuid())
+  status               OrderStatus  @default(PENDING_APPROVAL)
+  note                 String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+
+
+    client     User        @relation("ClientOrders", fields: [clientId], references: [id])
+    clientId   String
+    provider   User        @relation("ProviderOrders", fields: [providerId], references: [id])
+    providerId String
+    price           Decimal?     @db.Decimal(10, 2) // Preço final acordado
+    proposedDate    DateTime?    // Data sugerida pelo cliente
+    proposal        Proposal?    // A proposta/orçamento associada
+    orderItems   OrderItem[]
+    review       Review?
+    notifications Notification[]
+    changeRequests OrderChangeRequest[]
+
+    @@map("orders")
+}
+
+model Proposal {
+  id        String   @id @default(uuid())
+  price     Decimal  @db.Decimal(10, 2)
+  details   String?
+  createdAt DateTime @default(now())
+
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   String   @unique
+
+  @@map("proposals")
+}
+
+model ReviewPhoto {
+  id        String  @id @default(uuid())
+  imageUrl  String
+
+  // Relação: Uma foto pertence a uma avaliação
+  review    Review  @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reviewId  String
+
+  @@map("review_photos")
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  rating    Int // Nota de 1 a 5
+  comment   String?
+  createdAt DateTime @default(now())
+  status    ReviewStatus @default(ACTIVE)
+
+  // Relações
+  order     Order    @relation(fields: [orderId], references: [id])
+  orderId   String   @unique // Apenas uma avaliação por pedido
+
+  reviewer  User     @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  reviewerId String // Quem avaliou (o cliente)
+
+  provider  User     @relation("ReviewsReceived", fields: [providerId], references: [id])
+  providerId String // Quem foi avaliado (o prestador)
+  photos    ReviewPhoto[]
+
+  @@map("reviews")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  type      String  
+  status    NotificationStatus @default(ACTIVE)
+
+  // Relações
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   String?
+
+  @@map("notifications")
+}
+
+model Conversation {
+  id           String    @id @default(uuid())
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  // Relação com os participantes
+  participants User[]
+  messages     Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  content        String
+  created_at     DateTime     @default(now())
+
+  // Relações
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  senderId       String
+
+  @@map("messages")
+}
+
+model PortfolioImage {
+  id         String   @id @default(uuid())
+  imageUrl   String
+  caption    String?
+  createdAt  DateTime @default(now())
+
+  // Relação: Uma imagem pertence a um provider
+  provider   User     @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  providerId String
+
+  @@map("portfolio_images")
+}
+
+model OrderItem {
+  id                   String             @id @default(uuid())
+  quantity             Int                @default(1)
+  unitPrice            Decimal?           @db.Decimal(10, 2) // Preço do item no momento do pedido
+
+  // Relação com o Pedido principal
+  order                Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId              String
+
+  // Relação com o serviço específico que foi adicionado
+  providerProfession   ProviderProfession @relation(fields: [providerProfessionId], references: [id], onDelete: Restrict)
+  providerProfessionId String
+
+  @@map("order_items")
+}
